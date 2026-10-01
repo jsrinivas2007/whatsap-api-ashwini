@@ -3,7 +3,10 @@
 import { useState, useEffect } from 'react';
 import { ArrowRight, Save, Send, Link, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 
-const API = (process.env.NEXT_PUBLIC_API_URL || (process.env.NODE_ENV === 'production' ? 'https://whatsap-api-ashwini.onrender.com' : 'http://localhost:3001')).replace(/\/+$/, '');
+const RAW_API = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/+$/, '');
+const API = (/(^|\/\/)(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/i.test(RAW_API) || !RAW_API)
+  ? (process.env.NODE_ENV === 'production' ? 'https://whatsap-api-ashwini.onrender.com' : 'http://localhost:3001')
+  : RAW_API;
 
 export default function TestWhatsappConnectionSection() {
   const [phoneNumberId, setPhoneNumberId] = useState('');
