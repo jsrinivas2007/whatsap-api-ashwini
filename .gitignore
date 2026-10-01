@@ -12,3 +12,9 @@ Thumbs.db
 .claude/
 .gemini/
 .cursor/
+
+# Local-only maintenance script containing DB credentials
+backend/disable-rls.js
+
+# Nested-repo history backup (not part of the project)
+backend-nested-repo-backup.bundle
