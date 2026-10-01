@@ -9,7 +9,7 @@ async function getOverview() {
     redirect('/ops-x7f9a2b4c8d1/login');
   }
 
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/internal-ops/api/overview`, {
+  const res = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001').replace(/\/+$/, '')}/internal-ops/api/overview`, {
     headers: {
       'Cookie': `admin_session=${session.value}`
     },

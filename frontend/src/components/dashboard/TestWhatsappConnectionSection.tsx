@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { ArrowRight, Save, Send, Link, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const API = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001').replace(/\/+$/, '');
 
 export default function TestWhatsappConnectionSection() {
   const [phoneNumberId, setPhoneNumberId] = useState('');

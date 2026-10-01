@@ -3,7 +3,8 @@ import type { NextConfig } from "next";
 // Backend origin used by the API rewrites.
 // Set NEXT_PUBLIC_API_URL in Vercel (or any production host) to the deployed backend URL,
 // e.g. https://your-backend.vercel.app. Defaults to the local dev server.
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+// Trailing slashes are stripped so "/api/..." joins never produce "//api/...".
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/+$/, "");
 
 const nextConfig: NextConfig = {
   async rewrites() {

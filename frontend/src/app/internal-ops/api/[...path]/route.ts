@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
-const BACKEND = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const BACKEND = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001').replace(/\/+$/, '');
 
 type Params = { path: string[] };
 
