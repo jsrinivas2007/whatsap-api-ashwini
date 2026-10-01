@@ -12,6 +12,7 @@ import { ContactsModule } from './contacts/contacts.module.js';
 import { TagsModule } from './tags/tags.module.js';
 import { QuickRepliesModule } from './quick-replies/quick-replies.module.js';
 import { WhatsappFlowsModule } from './whatsapp-flows/whatsapp-flows.module.js';
+import { FlowsModule } from './flows/flows.module.js';
 import { CampaignsModule } from './campaigns/campaigns.module.js';
 import { ChatsModule } from './chats/chats.module.js';
 import { AiGenerateModule } from './ai-generate/ai-generate.module.js';
@@ -29,6 +30,7 @@ import { AdminModule } from './admin/admin.module.js';
     TagsModule,
     QuickRepliesModule,
     WhatsappFlowsModule,
+    FlowsModule,
     CampaignsModule,
     ChatsModule,
     AiGenerateModule,
