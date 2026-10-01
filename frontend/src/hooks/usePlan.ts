@@ -16,7 +16,9 @@ export function usePlan() {
   useEffect(() => {
     async function fetchPlan() {
       try {
-        const res = await fetch('http://localhost:3001/api/billing/subscription-status');
+        // Relative path: served through the Next.js rewrite to the backend,
+        // which also lets AuthProvider inject the x-account-id header.
+        const res = await fetch('/api/billing/subscription-status');
         if (res.ok) {
           const json = await res.json();
           setData(json);

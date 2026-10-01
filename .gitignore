@@ -1,5 +1,6 @@
 # Env files
 .env*
+!.env.example
 
 # Dependencies
 node_modules/

@@ -13,7 +13,7 @@ export default function PricingPage() {
 
   const handleSubscribe = async (planKey: string, price: number) => {
     try {
-      const res = await fetch('http://localhost:3001/api/billing/create-order', {
+      const res = await fetch('/api/billing/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ planKey, amount: price })
