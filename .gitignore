@@ -1,0 +1,14 @@
+# Env files
+.env*
+
+# Dependencies
+node_modules/
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# AI Agent Folders
+.claude/
+.gemini/
+.cursor/

@@ -1,0 +1,133 @@
+/* loader.css - The core 3-dot bouncy animation */
+/* We use CSS variables --tw-color-primary, or standard HSL values based on theme */
+
+.loader-container {
+  position: relative;
+  width: 160px;
+  height: 100px;
+}
+
+.loader-container.size-sm {
+  transform: scale(0.2);
+}
+
+.loader-container.size-md {
+  transform: scale(0.4);
+}
+
+.loader-container.size-lg {
+  transform: scale(0.6);
+}
+
+.loader-mark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 10;
+  width: 160px;
+  height: 100px;
+  margin-left: -80px;
+  margin-top: -50px;
+  border-radius: 5px;
+  /* Instead of hardcoded #1e3f57, use primary variable */
+  background: var(--loader-color, var(--primary));
+  opacity: 1;
+  animation: dot1_ 3s cubic-bezier(0.55,0.3,0.24,0.99) infinite;
+}
+
+.loader-mark:nth-child(2) {
+  z-index: 11;
+  width: 150px;
+  height: 90px;
+  margin-top: -45px;
+  margin-left: -75px;
+  border-radius: 3px;
+  background: var(--loader-color, var(--primary));
+  opacity: 0.75;
+  animation-name: dot2_;
+}
+
+.loader-mark:nth-child(3) {
+  z-index: 12;
+  width: 40px;
+  height: 20px;
+  margin-top: 50px;
+  margin-left: -20px;
+  border-radius: 0 0 5px 5px;
+  background: var(--loader-color, var(--primary));
+  opacity: 0.5;
+  animation-name: dot3_;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loader-mark, .loader-mark:nth-child(2), .loader-mark:nth-child(3) {
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    top: 0; left: 0; right: 0; bottom: 0;
+    margin: auto;
+  }
+}
+
+@keyframes dot1_ {
+  3%,97% {
+    width: 160px;
+    height: 100px;
+    margin-top: -50px;
+    margin-left: -80px;
+  }
+  30%,36% {
+    width: 80px;
+    height: 120px;
+    margin-top: -60px;
+    margin-left: -40px;
+  }
+  63%,69% {
+    width: 40px;
+    height: 80px;
+    margin-top: -40px;
+    margin-left: -20px;
+  }
+}
+
+@keyframes dot2_ {
+  3%,97% {
+    height: 90px;
+    width: 150px;
+    margin-left: -75px;
+    margin-top: -45px;
+  }
+  30%,36% {
+    width: 70px;
+    height: 96px;
+    margin-left: -35px;
+    margin-top: -48px;
+  }
+  63%,69% {
+    width: 32px;
+    height: 60px;
+    margin-left: -16px;
+    margin-top: -30px;
+  }
+}
+
+@keyframes dot3_ {
+  3%,97% {
+    height: 20px;
+    width: 40px;
+    margin-left: -20px;
+    margin-top: 50px;
+  }
+  30%,36% {
+    width: 8px;
+    height: 8px;
+    margin-left: -5px;
+    margin-top: 49px;
+    border-radius: 8px;
+  }
+  63%,69% {
+    width: 16px;
+    height: 4px;
+    margin-left: -8px;
+    margin-top: -37px;
+    border-radius: 10px;
+  }
+}

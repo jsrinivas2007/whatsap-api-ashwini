@@ -1,0 +1,2 @@
+ALTER TABLE public.automation_flows DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.automation_runs DISABLE ROW LEVEL SECURITY;
