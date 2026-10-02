@@ -2,12 +2,8 @@
 
 import Link from 'next/link';
 import { MessageSquare } from 'lucide-react';
-import { useState } from 'react';
-import { LegalModal, LegalDocumentType } from '@/components/legal/LegalModal';
 
 export function Footer() {
-  const [legalModalType, setLegalModalType] = useState<LegalDocumentType>(null);
-
   return (
     <footer className="bg-navy-deep text-ink py-16 px-6">
       <div className="container mx-auto max-w-6xl grid grid-cols-2 md:grid-cols-5 gap-12">
@@ -58,13 +54,12 @@ export function Footer() {
         <div>
           <h4 className="font-semibold mb-6 text-white">Legal</h4>
           <ul className="space-y-4 text-sm text-slate">
-            <li><button onClick={() => setLegalModalType('terms')} className="hover:text-sea-foam transition-colors">Terms of Service</button></li>
-            <li><button onClick={() => setLegalModalType('privacy')} className="hover:text-sea-foam transition-colors">Privacy Policy</button></li>
+            <li><Link href="/terms" className="hover:text-sea-foam transition-colors">Terms of Service</Link></li>
+            <li><Link href="/privacy" className="hover:text-sea-foam transition-colors">Privacy Policy</Link></li>
+            <li><Link href="/refund-policy" className="hover:text-sea-foam transition-colors">Refund Policy</Link></li>
           </ul>
         </div>
       </div>
-      
-      <LegalModal type={legalModalType} onClose={() => setLegalModalType(null)} />
     </footer>
   );
 }

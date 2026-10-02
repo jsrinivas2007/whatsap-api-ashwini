@@ -7,7 +7,6 @@ import { AuthInput, AuthButton, AuthDivider } from '@/components/auth/AuthFormEl
 import CountryCodeSelector from '@/components/auth/CountryCodeSelector';
 import { registerMock, isAuthenticated } from '@/lib/auth';
 import { useEffect } from 'react';
-import { LegalModal, LegalDocumentType } from '@/components/legal/LegalModal';
 
 interface FormData {
   fullName: string;
@@ -36,7 +35,6 @@ export default function RegisterPage() {
   const [errors, setErrors] = useState<FormErrors>({});
   const [loading, setLoading] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
-  const [legalModalType, setLegalModalType] = useState<LegalDocumentType>(null);
 
   // AuthProvider handles redirect if already authenticated
 
@@ -164,9 +162,9 @@ export default function RegisterPage() {
         />
         <label htmlFor="terms" className="text-xs text-gray-500 leading-relaxed cursor-pointer">
           I agree to the{' '}
-          <button type="button" onClick={() => setLegalModalType('terms')} className="font-medium hover:underline" style={{ color: 'var(--sea)' }}>Terms of Service</button>
+          <Link href="/terms" target="_blank" rel="noopener noreferrer" className="font-medium hover:underline" style={{ color: 'var(--sea)' }}>Terms of Service</Link>
           {' '}and{' '}
-          <button type="button" onClick={() => setLegalModalType('privacy')} className="font-medium hover:underline" style={{ color: 'var(--sea)' }}>Privacy Policy</button>
+          <Link href="/privacy" target="_blank" rel="noopener noreferrer" className="font-medium hover:underline" style={{ color: 'var(--sea)' }}>Privacy Policy</Link>
         </label>
       </div>
 
@@ -185,8 +183,6 @@ export default function RegisterPage() {
           Log In
         </Link>
       </p>
-
-      <LegalModal type={legalModalType} onClose={() => setLegalModalType(null)} />
     </form>
   );
 }
