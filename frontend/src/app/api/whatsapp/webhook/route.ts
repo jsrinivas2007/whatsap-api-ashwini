@@ -130,17 +130,24 @@ async function processWebhookEvent(payload: any) {
               contactId = (newContact as any).id;
             }
 
-            // Find or create Conversation
+            // Find or create Conversation. NOTE: the conversation_status enum is
+            // ('open','closed','snoozed') — 'new' is NOT valid and previously made
+            // this query throw, so every inbound reply was silently dropped.
             let conversationId = null;
-            const { data: existingConv } = await supabase
+            const { data: existingConv, error: existingConvErr } = await supabase
               .from('conversations')
               .select('id')
               .eq('account_id', accountId)
               .eq('contact_id', contactId)
-              .in('status', ['open', 'new', 'snoozed'])
-              .order('created_at', { ascending: false })
+              .in('status', ['open', 'snoozed'])
+              .order('last_message_at', { ascending: false })
               .limit(1)
               .maybeSingle();
+
+            if (existingConvErr) {
+              console.error('Error looking up conversation:', existingConvErr);
+              continue;
+            }
 
             if (existingConv) {
               conversationId = (existingConv as any).id;
@@ -155,7 +162,7 @@ async function processWebhookEvent(payload: any) {
                 .insert({
                   account_id: accountId,
                   contact_id: contactId,
-                  status: 'new', // Or 'open' based on preference
+                  status: 'open', // must be a valid conversation_status enum value
                   last_message_at: timestamp
                 } as any)
                 .select('id')
@@ -168,7 +175,9 @@ async function processWebhookEvent(payload: any) {
               conversationId = (newConv as any).id;
             }
 
-            // Save the Message
+            // Save the Message. message_status enum is
+            // ('queued','sent','delivered','read','failed') — 'received' is invalid;
+            // inbound messages are stored as 'delivered' (we delivered them to us).
             const { error: msgErr } = await supabase
               .from('messages')
               .insert({
@@ -176,7 +185,7 @@ async function processWebhookEvent(payload: any) {
                 direction: 'inbound',
                 type: message.type,
                 content: { text: text },
-                status: 'received',
+                status: 'delivered',
                 message_id: messageId,
                 created_at: timestamp // If allowed to insert timestamp
               } as any);
