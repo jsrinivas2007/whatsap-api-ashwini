@@ -410,7 +410,7 @@ export class WhatsappSettingsController {
           conversation_id: conversationId,
           direction: 'outbound',
           type: templateName ? 'template' : 'text',
-          content: { text: previewText },
+          content: { text: previewText, ...(templateName ? { template_name: templateName } : {}) },
           status: 'sent',
           message_id: waMessageId,
           wa_message_id: waMessageId,

@@ -98,8 +98,8 @@ export class TemplatesService {
 
     const { data, error } = await query;
     if (error) {
-      console.warn('Templates table not found, falling back to mock data:', error.message);
-      return this.getMockTemplates(statusFilter);
+      console.error('Failed to fetch templates:', error.message);
+      return [];
     }
     return data;
   }
@@ -198,8 +198,8 @@ export class TemplatesService {
     }).select().single();
 
     if (error) {
-      console.warn('Failed to insert template to DB, returning mock success:', error.message);
-      return { id: `mock_${Date.now()}`, ...payload, status: initialStatus };
+      console.error('Failed to insert template to DB:', error.message);
+      throw new BadRequestException(`Failed to save template: ${error.message}`);
     }
 
     // Insert variables
@@ -243,10 +243,7 @@ export class TemplatesService {
     `).eq('account_id', accountId).eq('id', id).single();
 
     if (error) {
-      console.warn('Failed to fetch template by id (fallback mock applied):', error.message);
-      const mocks = this.getMockTemplates('ALL');
-      const mock = mocks.find(m => m.id === id);
-      if (mock) return mock;
+      console.error('Failed to fetch template by id:', error.message);
       throw new BadRequestException('Template not found');
     }
     return data;
@@ -289,7 +286,34 @@ export class TemplatesService {
           const headerComp = tmpl.components?.find((c: any) => c.type === 'HEADER');
           const bodyComp = tmpl.components?.find((c: any) => c.type === 'BODY');
           const footerComp = tmpl.components?.find((c: any) => c.type === 'FOOTER');
-          
+
+          // Media headers (IMAGE/VIDEO/DOCUMENT) carry no text — resolve their
+          // example handle to a viewable URL so previews can show the real asset
+          let headerContent = headerComp?.text || null;
+          if (headerComp && headerComp.format && headerComp.format !== 'TEXT') {
+            const example = headerComp.example || {};
+            let mediaUrl: string | null = example.header_url?.[0] || null;
+            const handle: string | undefined = example.header_handle?.[0];
+            if (!mediaUrl && handle) {
+              if (/^https?:\/\//i.test(handle)) {
+                // Meta sometimes returns the resolved CDN URL directly in the
+                // handle field — use it as-is instead of treating it as an ID.
+                mediaUrl = handle;
+              } else {
+                try {
+                  const mediaRes = await fetch(
+                    `https://graph.facebook.com/v21.0/${encodeURIComponent(handle)}?fields=url&access_token=${metaDetails.access_token}`
+                  );
+                  const mediaData: any = await mediaRes.json();
+                  mediaUrl = mediaData.url || null;
+                } catch {
+                  // handle not resolvable — preview falls back to placeholder
+                }
+              }
+            }
+            if (mediaUrl) headerContent = mediaUrl;
+          }
+
           await client.from('templates').upsert({
             account_id: accountId,
             meta_template_id: tmpl.id,
@@ -298,10 +322,32 @@ export class TemplatesService {
             category: tmpl.category,
             status: tmpl.status,
             header_type: headerComp?.format || 'NONE',
-            header_content: headerComp?.text || null,
+            header_content: headerContent,
             body: bodyComp?.text || '',
             footer: footerComp?.text || null
           }, { onConflict: 'account_id, name, language' });
+
+          // Store body variable sample values so previews can render them
+          const sampleTexts: string[] = bodyComp?.example?.body_text?.[0] || [];
+          if (sampleTexts.length > 0) {
+            const { data: saved } = await client
+              .from('templates')
+              .select('id')
+              .eq('account_id', accountId)
+              .eq('name', tmpl.name)
+              .eq('language', tmpl.language)
+              .maybeSingle();
+            if (saved?.id) {
+              await client.from('template_variables').delete().eq('template_id', saved.id);
+              await client.from('template_variables').insert(
+                sampleTexts.map((sample: string, i: number) => ({
+                  template_id: saved.id,
+                  position: i + 1,
+                  sample_value: sample,
+                }))
+              );
+            }
+          }
         }
       }
       
@@ -320,12 +366,47 @@ export class TemplatesService {
   }
 
   async getTemplateInsights(accountId: string, id: string) {
-    // Return mock insights
+    if (!accountId) throw new BadRequestException('accountId is required');
+    const client = this.supabase.getClient();
+
+    const { data: tmpl, error: tErr } = await client
+      .from('templates')
+      .select('id, name')
+      .eq('id', id)
+      .eq('account_id', accountId)
+      .maybeSingle();
+    if (tErr || !tmpl) throw new BadRequestException('Template not found');
+
+    // Meta's Insights API is not available to this app's token, so we report
+    // exactly what has actually been sent through the platform: aggregate the
+    // real outbound messages logged for this template by their delivery status.
+    const { data: rows, error } = await client
+      .from('messages')
+      .select('status')
+      .eq('direction', 'outbound')
+      .eq('type', 'template')
+      .filter('content->>template_name', 'eq', tmpl.name);
+    if (error) throw new BadRequestException(error.message);
+
+    const list = rows || [];
+    let failed = 0;
+    let read = 0;
+    let delivered = 0;
+    for (const r of list) {
+      if (r.status === 'failed') failed++;
+      else if (r.status === 'read') { read++; delivered++; }
+      else if (r.status === 'delivered') delivered++;
+    }
+    // 'sent' = every message that was handed to WhatsApp (accepted attempts).
+    const sent = list.length;
+
     return {
-      sent: Math.floor(Math.random() * 5000),
-      delivered: Math.floor(Math.random() * 4800),
-      read: Math.floor(Math.random() * 3000),
-      clicked: Math.floor(Math.random() * 500)
+      templateName: tmpl.name,
+      total: list.length,
+      sent,
+      delivered,
+      read,
+      failed,
     };
   }
 
@@ -384,68 +465,5 @@ export class TemplatesService {
     // e.g., payload.entry[0].changes[0].value.event === 'APPROVED'
     console.log('Received Meta webhook:', JSON.stringify(payload, null, 2));
     return { received: true };
-  }
-
-  // --- Mock Data Fallback ---
-  private getMockTemplates(statusFilter?: string) {
-    const mocks = [
-      {
-        id: 'mock_1',
-        name: 'welcome_offer',
-        language: 'en',
-        category: 'MARKETING',
-        header_type: 'IMAGE',
-        header_content: 'https://via.placeholder.com/800x400',
-        body: 'Hi {{1}}! Welcome to our store. Use code {{2}} for 20% off.',
-        footer: 'Reply STOP to opt out.',
-        status: 'APPROVED',
-        template_variables: [
-          { position: 1, sample_value: 'John' },
-          { position: 2, sample_value: 'WELCOME20' }
-        ],
-        template_buttons: [
-          { type: 'URL', render_order: 0, button_text: 'Shop Now', website_url: 'https://example.com' },
-          { type: 'QUICK_REPLY', render_order: 1, button_text: 'Talk to Sales' }
-        ]
-      },
-      {
-        id: 'mock_2',
-        name: 'shipping_update',
-        language: 'en',
-        category: 'UTILITY',
-        header_type: 'NONE',
-        body: 'Your order {{1}} is out for delivery today.',
-        footer: 'Thanks for shopping with us!',
-        status: 'PENDING',
-        template_variables: [
-          { position: 1, sample_value: '#12345' }
-        ],
-        template_buttons: []
-      },
-      {
-        id: 'mock_3',
-        name: 'account_alert',
-        language: 'en',
-        category: 'AUTHENTICATION',
-        header_type: 'TEXT',
-        header_content: 'Security Alert',
-        body: 'Suspicious login detected from {{1}}.',
-        footer: null,
-        status: 'REJECTED',
-        rejection_reason: 'Message violates policy against frightening language.',
-        template_variables: [
-          { position: 1, sample_value: 'New York, USA' }
-        ],
-        template_buttons: [
-          { type: 'QUICK_REPLY', render_order: 0, button_text: 'It was me' },
-          { type: 'QUICK_REPLY', render_order: 1, button_text: 'Secure Account' }
-        ]
-      }
-    ];
-
-    if (statusFilter && statusFilter.toUpperCase() !== 'ALL') {
-      return mocks.filter(m => m.status === statusFilter.toUpperCase());
-    }
-    return mocks;
   }
 }

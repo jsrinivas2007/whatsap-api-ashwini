@@ -28,21 +28,27 @@ export default function TemplatesPage() {
   const [syncing, setSyncing] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
+  // Insights modal (real per-template usage stats from the backend)
+  const [insightsModal, setInsightsModal] = useState<Template | null>(null);
+  const [insights, setInsights] = useState<any | null>(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  const [insightsError, setInsightsError] = useState<string | null>(null);
+
   const fetchTemplates = async () => {
     setLoading(true);
     try {
-      // Stub endpoint for frontend testing if backend not ready, 
-      // replace with real fetch later if needed. For now we emulate the API call.
       const res = await fetch(`/api/templates?status=${activeTab}`);
       if (res.ok) {
         const data = await res.json();
         setTemplates(Array.isArray(data) ? data : []);
       } else {
-        // Fallback mock data if API is down
-        setTemplates(getMockTemplates(activeTab));
+        // Never show fake rows — surface the real failure instead
+        setTemplates([]);
+        notify("Failed to load templates from the server");
       }
     } catch (e) {
-      setTemplates(getMockTemplates(activeTab));
+      setTemplates([]);
+      notify("Network error while loading templates");
     }
     setLoading(false);
   };
@@ -78,6 +84,39 @@ export default function TemplatesPage() {
       notify("Failed to delete template");
     }
   };
+
+  const openInsights = async (template: Template) => {
+    setInsightsModal(template);
+    setInsights(null);
+    setInsightsError(null);
+    setInsightsLoading(true);
+    try {
+      const res = await fetch(`/api/templates/${template.id}/insights`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(typeof err.message === "string" ? err.message : "Failed to load insights");
+      }
+      setInsights(await res.json());
+    } catch (e: any) {
+      setInsightsError(e?.message || "Failed to load insights");
+    } finally {
+      setInsightsLoading(false);
+    }
+  };
+
+  const closeInsights = () => {
+    setInsightsModal(null);
+    setInsights(null);
+    setInsightsError(null);
+  };
+
+  // Replace {{1}} placeholders with stored sample values so the preview looks
+  // like the real delivered message instead of raw variable tokens.
+  const renderPreviewBody = (t: Template) =>
+    String(t.body || "").replace(/\{\{(\d+)\}\}/g, (_m, n) => {
+      const v = (t.template_variables || []).find((x: any) => x.position === Number(n));
+      return v?.sample_value || `{{${n}}}`;
+    });
 
   const getStatusBadge = (status: string) => {
     switch (status.toUpperCase()) {
@@ -198,6 +237,7 @@ export default function TemplatesPage() {
                         </button>
                         <button
                           type="button"
+                          onClick={() => openInsights(template)}
                           disabled={template.status !== 'APPROVED'}
                           className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-[11px] font-medium text-foreground hover:bg-muted transition disabled:opacity-40 disabled:cursor-not-allowed"
                         >
@@ -248,73 +288,76 @@ export default function TemplatesPage() {
               brandName="Ashwini Innovations"
               headerType={previewModal.header_type}
               headerContent={previewModal.header_content}
-              body={previewModal.body}
+              body={renderPreviewBody(previewModal)}
               footer={previewModal.footer || undefined}
               buttons={previewModal.template_buttons}
             />
           </div>
         </div>
       )}
+
+      {/* Insights Modal */}
+      {insightsModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+          onClick={closeInsights}
+        >
+          <div
+            className="relative w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={closeInsights}
+              aria-label="Close insights"
+              className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted transition"
+            >
+              <XCircle className="h-5 w-5" />
+            </button>
+            <div className="mb-1 flex items-center gap-2">
+              <BarChart2 className="h-5 w-5 text-primary" />
+              <h3 className="text-[16px] font-semibold text-foreground">Template Insights</h3>
+            </div>
+            <p className="mb-5 text-[13px] text-muted-foreground">
+              Real usage recorded by Ashwini Innovations for{" "}
+              <span className="font-medium text-foreground">{insightsModal.name}</span>.
+            </p>
+
+            {insightsLoading ? (
+              <div className="flex items-center justify-center py-10">
+                <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : insightsError ? (
+              <p className="rounded-lg bg-rose-500/10 px-4 py-3 text-[13px] text-rose-600">{insightsError}</p>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { label: "Sent", value: insights?.sent ?? 0, tone: "text-foreground" },
+                    { label: "Delivered", value: insights?.delivered ?? 0, tone: "text-emerald-600" },
+                    { label: "Read", value: insights?.read ?? 0, tone: "text-primary" },
+                    { label: "Failed", value: insights?.failed ?? 0, tone: "text-rose-600" },
+                  ].map((m) => (
+                    <div key={m.label} className="rounded-xl border border-border bg-muted/30 p-4">
+                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{m.label}</p>
+                      <p className={`mt-1 text-[24px] font-bold ${m.tone}`}>{m.value.toLocaleString()}</p>
+                    </div>
+                  ))}
+                </div>
+                {insights && insights.total === 0 ? (
+                  <p className="text-[12px] text-muted-foreground">
+                    No messages have been sent with this template yet, so there is nothing to report. Stats appear here once it is used in a campaign or test send.
+                  </p>
+                ) : (
+                  <p className="text-[12px] text-muted-foreground">
+                    Based on {insights?.total?.toLocaleString?.() ?? 0} outbound message(s) logged through this platform.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
-}
-
-// Fallback Mock Data for UI Dev
-function getMockTemplates(statusFilter: string) {
-  const mocks: Template[] = [
-    {
-      id: 'mock_1',
-      name: 'welcome_offer',
-      language: 'en',
-      category: 'MARKETING',
-      header_type: 'IMAGE',
-      header_content: 'https://via.placeholder.com/800x400',
-      body: 'Hi {{1}}! Welcome to our store. Use code {{2}} for 20% off.\n\n*Valid for 48 hours.*',
-      footer: 'Reply STOP to opt out.',
-      status: 'APPROVED',
-      template_variables: [
-        { position: 1, sample_value: 'John' },
-        { position: 2, sample_value: 'WELCOME20' }
-      ],
-      template_buttons: [
-        { type: 'URL', render_order: 0, button_text: 'Shop Now', website_url: 'https://example.com' },
-        { type: 'QUICK_REPLY', render_order: 1, button_text: 'Talk to Sales' }
-      ]
-    },
-    {
-      id: 'mock_2',
-      name: 'shipping_update',
-      language: 'en',
-      category: 'UTILITY',
-      header_type: 'NONE',
-      header_content: null,
-      body: 'Your order {{1}} is out for delivery today.',
-      footer: 'Thanks for shopping with us!',
-      status: 'PENDING',
-      template_variables: [
-        { position: 1, sample_value: '#12345' }
-      ],
-      template_buttons: []
-    },
-    {
-      id: 'mock_3',
-      name: 'account_alert',
-      language: 'en',
-      category: 'AUTHENTICATION',
-      header_type: 'TEXT',
-      header_content: 'Security Alert',
-      body: 'Suspicious login detected from {{1}}.',
-      footer: null,
-      status: 'REJECTED',
-      template_variables: [
-        { position: 1, sample_value: 'New York, USA' }
-      ],
-      template_buttons: [
-        { type: 'QUICK_REPLY', render_order: 0, button_text: 'It was me' },
-        { type: 'QUICK_REPLY', render_order: 1, button_text: 'Secure Account' }
-      ]
-    }
-  ];
-  if (statusFilter !== 'ALL') return mocks.filter(m => m.status === statusFilter);
-  return mocks;
 }
