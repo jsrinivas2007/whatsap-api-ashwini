@@ -280,6 +280,9 @@ export class WhatsappSettingsController {
 
       let result: any;
       let sentAs: string;
+      // Human-readable copy of what was actually sent, stored so the Chats
+      // bubble shows the real message instead of a synthetic placeholder.
+      let messagePreview: string | null = null;
       if (templateName) {
         // Meta errors #132000/#132012 happen when a template's variables or
         // media header are not given matching values at send time. Build the
@@ -328,17 +331,23 @@ export class WhatsappSettingsController {
           }
 
           const needed = (String(tmplRow?.body || '').match(/\{\{\d+\}\}/g) || []).length;
+          let bodyParameters: { type: string; text: string }[] = [];
           if (needed > 0) {
             const vars = [...(tmplRow?.template_variables || [])].sort(
               (a: any, b: any) => a.position - b.position,
             );
             const provided: string[] = Array.isArray(body.paramValues) ? body.paramValues : [];
-            const parameters = Array.from({ length: needed }, (_unused, i) => ({
+            bodyParameters = Array.from({ length: needed }, (_unused, i) => ({
               type: 'text',
               text: String(provided[i] || vars[i]?.sample_value || `test ${i + 1}`),
             }));
-            components.push({ type: 'body', parameters });
+            components.push({ type: 'body', parameters: bodyParameters });
           }
+
+          // Render the real body with {{n}} replaced by the values we sent.
+          messagePreview = String(tmplRow?.body || '')
+            .replace(/\{\{(\d+)\}\}/g, (_m, d) => bodyParameters[Number(d) - 1]?.text ?? _m)
+            .trim() || `Template \"${templateName}\"`;
         }
         result = await this.whatsappApiService.sendTemplateMessage(
           accountId,
@@ -355,6 +364,7 @@ export class WhatsappSettingsController {
           'Test message from Ashwini Innovations ✔ Connection is working.'
         );
         sentAs = 'text';
+        messagePreview = 'Test message from Ashwini Innovations ✔ Connection is working.';
       }
 
       // Save this outbound test message to the DB so it appears in the Chats UI
@@ -393,9 +403,9 @@ export class WhatsappSettingsController {
         // in BOTH message_id and wa_message_id so the delivery-status webhook can
         // match this row and update sent -> delivered -> read / failed.
         const waMessageId = result.messages?.[0]?.id || `test_${Date.now()}`;
-        const previewText = templateName
-          ? `Template \"${templateName}\"${Array.isArray(body.paramValues) && body.paramValues.length ? ` (${body.paramValues.join(', ')})` : ''}`
-          : 'Test message from Ashwini Innovations';
+        const previewText =
+          messagePreview ||
+          (templateName ? `Template \"${templateName}\"` : 'Test message from Ashwini Innovations');
         await client.from('messages').insert({
           conversation_id: conversationId,
           direction: 'outbound',
