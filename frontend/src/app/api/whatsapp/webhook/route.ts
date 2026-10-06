@@ -196,6 +196,32 @@ async function processWebhookEvent(payload: any) {
               console.log(`Saved inbound message ${messageId} to conversation ${conversationId}`);
             }
           }
+        } else if (change.value && change.value.statuses) {
+          // Delivery receipts for OUTBOUND messages: Meta calls this webhook as a
+          // message moves sent -> delivered -> read (or failed). Without it the
+          // Chats/Campaign UI would show every outbound message stuck at "sent"
+          // and you could never tell whether a reply was actually delivered.
+          for (const st of change.value.statuses) {
+            const waId = st.id;
+            if (!waId) continue;
+            // Map Meta's status onto our message_status enum; ignore values we
+            // can't store (e.g. 'accepted', 'deleted', 'warning').
+            const allowed = ['sent', 'delivered', 'read', 'failed'];
+            if (!allowed.includes(st.status)) continue;
+            const errorMsg = Array.isArray(st.errors) && st.errors.length
+              ? st.errors.map((e: any) => e.message || e.error_message || e.title).filter(Boolean).join(' | ')
+              : null;
+            // Our send paths store Meta's id in either message_id or wa_message_id.
+            const { error: updErr } = await supabase
+              .from('messages')
+              .update({ status: st.status })
+              .or(`message_id.eq.${waId},wa_message_id.eq.${waId}`);
+            if (updErr) {
+              console.error(`Failed to update status for ${waId}:`, updErr);
+            } else if (st.status === 'failed') {
+              console.warn(`Outbound message ${waId} FAILED at Meta: ${errorMsg || 'no detail'}`);
+            }
+          }
         }
       }
     }

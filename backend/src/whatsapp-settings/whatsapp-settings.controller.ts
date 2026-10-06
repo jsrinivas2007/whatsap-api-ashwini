@@ -193,6 +193,20 @@ export class WhatsappSettingsController {
     return { url: 'https://business.facebook.com/wa/manage/insights/' };
   }
 
+  /**
+   * Approved templates for the connected WABA (with parameter/media info),
+   * used by the Campaigns screen to offer real templates in its picker.
+   */
+  @Get('approved-templates')
+  async getApprovedTemplates(@Headers() headers: any) {
+    const accountId = this.getAccountId(headers);
+    const waba = await this.wabaService.getWabaAccount(accountId);
+    if (!waba?.access_token || !waba?.waba_id) {
+      return [];
+    }
+    return this.metaApiService.listApprovedTemplates(waba.access_token, waba.waba_id);
+  }
+
   @Post('test-config')
   async testConfig(@Body() body: any, @Headers() headers: any) {
     const accountId = this.getAccountId(headers);
@@ -238,30 +252,100 @@ export class WhatsappSettingsController {
 
     // Credentials are retrieved server-side from DB — access token never exposed to frontend
     try {
-      // Pick what to send: explicit template > first APPROVED template > plain text.
-      // (The old hardcoded 'hello_world' sample only exists on Meta sandbox
-      // numbers, which caused "template does not exist" errors on real numbers.)
+      // Pick what to send: explicit template > first APPROVED template WITHOUT
+      // variables > plain text. Sending a parameterized template with no values
+      // triggers Meta error #132012, so auto-pick skips templates with {{params}}.
       const waba = await this.wabaService.getWabaAccount(accountId);
       let templateName: string | null = body.templateName || null;
       let language: string = body.language || 'en_US';
+      let textFallbackReason: string | null = null;
 
       if (!templateName && waba?.access_token && waba?.waba_id) {
         const approved = await this.metaApiService.listApprovedTemplates(waba.access_token, waba.waba_id);
-        if (approved.length > 0) {
-          templateName = approved[0].name;
-          language = approved[0].language || language;
+        if (approved.length === 0) {
+          textFallbackReason = 'No approved templates exist on this WABA yet';
+        } else {
+          const usable = approved.filter(
+            (t: { paramCount: number; requiresMedia: boolean }) =>
+              t.paramCount === 0 && !t.requiresMedia,
+          );
+          if (usable.length > 0) {
+            templateName = usable[0].name;
+            language = usable[0].language || language;
+          } else {
+            textFallbackReason = 'Approved templates need variables or media attachments, which the test sender cannot provide automatically';
+          }
         }
       }
 
       let result: any;
       let sentAs: string;
       if (templateName) {
+        // Meta errors #132000/#132012 happen when a template's variables or
+        // media header are not given matching values at send time. Build the
+        // components from the UI-supplied paramValues (falling back to the
+        // sample values stored during template sync) plus the stored media
+        // header link so ANY template — with or without params/media — sends.
+        let components: any[] = [];
+        if (Array.isArray(body.components) && body.components.length > 0) {
+          components = body.components;
+        } else {
+          const client = this.wabaService['supabase'].getClient();
+          const { data: tmplRow } = await client
+            .from('templates')
+            .select('body, header_type, header_content, template_variables(*)')
+            .eq('account_id', accountId)
+            .eq('name', templateName)
+            .maybeSingle();
+
+          // Media header: Meta requires a header component when the template
+          // was created with a handle-based IMAGE/VIDEO/DOCUMENT header. The
+          // stored CDN link expires, so re-read the live example handle from
+          // Meta first and fall back to whatever is stored in our DB.
+          const headerType = String(tmplRow?.header_type || 'NONE').toUpperCase();
+          let headerLink = String(tmplRow?.header_content || '');
+          const mediaParamMap: Record<string, string> = { IMAGE: 'image', VIDEO: 'video', DOCUMENT: 'document' };
+          const mediaType = mediaParamMap[headerType];
+          if (mediaType && waba?.access_token && waba?.waba_id) {
+            try {
+              const metaTmpls: any = await fetch(
+                `https://graph.facebook.com/v21.0/${waba.waba_id}/message_templates?limit=100&access_token=${waba.access_token}`
+              ).then((r) => r.json());
+              const live = (metaTmpls.data || []).find(
+                (x: any) => x.name === templateName && (x.language === language || !language),
+              );
+              const liveHandle = live?.components?.find((c: any) => c.type === 'HEADER')?.example?.header_handle?.[0];
+              if (liveHandle) headerLink = String(liveHandle);
+            } catch {
+              // keep stored link
+            }
+          }
+          if (mediaType && /^https?:\/\//i.test(headerLink)) {
+            components.push({
+              type: 'header',
+              parameters: [{ type: mediaType, [mediaType]: { link: headerLink } }],
+            });
+          }
+
+          const needed = (String(tmplRow?.body || '').match(/\{\{\d+\}\}/g) || []).length;
+          if (needed > 0) {
+            const vars = [...(tmplRow?.template_variables || [])].sort(
+              (a: any, b: any) => a.position - b.position,
+            );
+            const provided: string[] = Array.isArray(body.paramValues) ? body.paramValues : [];
+            const parameters = Array.from({ length: needed }, (_unused, i) => ({
+              type: 'text',
+              text: String(provided[i] || vars[i]?.sample_value || `test ${i + 1}`),
+            }));
+            components.push({ type: 'body', parameters });
+          }
+        }
         result = await this.whatsappApiService.sendTemplateMessage(
           accountId,
           body.recipient,
           templateName,
           language,
-          []
+          components
         );
         sentAs = `template:${templateName}`;
       } else {
@@ -305,17 +389,25 @@ export class WhatsappSettingsController {
 
       // 3. Insert Message
       if (conversationId) {
+        // Store a truthful preview (not a fixed placeholder) and keep Meta's id
+        // in BOTH message_id and wa_message_id so the delivery-status webhook can
+        // match this row and update sent -> delivered -> read / failed.
+        const waMessageId = result.messages?.[0]?.id || `test_${Date.now()}`;
+        const previewText = templateName
+          ? `Template \"${templateName}\"${Array.isArray(body.paramValues) && body.paramValues.length ? ` (${body.paramValues.join(', ')})` : ''}`
+          : 'Test message from Ashwini Innovations';
         await client.from('messages').insert({
           conversation_id: conversationId,
           direction: 'outbound',
-          type: 'template',
-          content: { text: 'Hello World Template Sent' },
+          type: templateName ? 'template' : 'text',
+          content: { text: previewText },
           status: 'sent',
-          message_id: result.messages?.[0]?.id || `test_${Date.now()}`,
+          message_id: waMessageId,
+          wa_message_id: waMessageId,
         });
       }
 
-      return { success: true, sentAs, meta: result };
+      return { success: true, sentAs, textFallbackReason, meta: result };
     } catch (error: any) {
       this.logger.error(`Failed to send test message: ${error.message}`);
       const friendly = /24 hours|re-engagement|session/i.test(error.message || '')
