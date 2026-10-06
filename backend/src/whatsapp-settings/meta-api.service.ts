@@ -116,6 +116,42 @@ export class MetaApiService {
     }
   }
 
+  /**
+   * Live-validates a Phone Number ID + token pair against the Graph API.
+   * Throws with Meta's own error message when credentials are wrong/expired.
+   */
+  async validateCredentials(accessToken: string, phoneNumberId: string) {
+    const url = `https://graph.facebook.com/v21.0/${phoneNumberId}?fields=id,display_phone_number,verified_name,platform_type&access_token=${accessToken}`;
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        const msg = data.error?.message || 'Invalid credentials';
+        this.logger.warn(`Credential validation failed for phone ${phoneNumberId}: ${msg}`);
+        throw new Error(msg);
+      }
+      return data as { id: string; display_phone_number?: string; verified_name?: string; platform_type?: string };
+    } catch (error: any) {
+      if (error.message && !error.message.includes('fetch')) throw error;
+      this.logger.error(`Could not reach Graph API for validation: ${error.message}`);
+      throw new Error('Could not reach Meta Graph API for validation');
+    }
+  }
+
+  /**
+   * Lists APPROVED message templates under a WABA (first page).
+   */
+  async listApprovedTemplates(accessToken: string, wabaId: string) {
+    const url = `https://graph.facebook.com/v21.0/${wabaId}/message_templates?status=APPROVED&limit=100&access_token=${accessToken}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      this.logger.warn(`Template listing failed for WABA ${wabaId}: ${data.error?.message}`);
+      return [] as { name: string; language: string }[];
+    }
+    return (data.data || []).map((t: any) => ({ name: t.name, language: t.language }));
+  }
+
   // Simulates pulling data from Graph API, which would be cached in Redis in production (15-30min TTL)
   async fetchAccountStatus(wabaId: string) {
     return {

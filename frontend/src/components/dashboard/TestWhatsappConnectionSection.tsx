@@ -18,9 +18,20 @@ export default function TestWhatsappConnectionSection() {
   const [isSaving, setIsSaving] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [message, setMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [hasSavedToken, setHasSavedToken] = useState(false);
 
-  // ── On mount: check if credentials are already saved in the backend ──
+  // ── On mount: restore the form from localStorage + backend (survives tab switches) ──
   useEffect(() => {
+    try {
+      const saved = localStorage.getItem('wa-connection-form');
+      if (saved) {
+        const f = JSON.parse(saved);
+        if (f.phoneNumberId) setPhoneNumberId(f.phoneNumberId);
+        if (f.wabaId) setWabaId(f.wabaId);
+        if (f.testRecipient) setTestRecipient(f.testRecipient);
+      }
+    } catch { /* ignore malformed storage */ }
+
     const checkExistingConfig = async () => {
       try {
         const res = await fetch(`${API}/api/whatsapp/setup-status`, {
@@ -28,9 +39,21 @@ export default function TestWhatsappConnectionSection() {
         });
         if (!res.ok) { setStatus('Disconnected'); return; }
         const data = await res.json();
-        // If a record exists with a phone number, credentials have been saved before
-        if (data && data.displayPhoneNumber) {
-          setStatus('Connected');
+        if (data && data.phoneNumberId) {
+          // Prefill saved (non-secret) identifiers so the form isn't blank
+          setPhoneNumberId((v) => v || data.phoneNumberId);
+          setWabaId((v) => v || data.wabaId || '');
+          setHasSavedToken(!!data.hasToken);
+          if (data.connectionVerified) {
+            setStatus('Connected');
+          } else {
+            // Record exists but Meta rejects the token — be honest, not "Connected"
+            setStatus('Disconnected');
+            setMessage({
+              type: 'error',
+              text: `Saved credentials could not be verified by Meta: ${data.verificationError || 'invalid or expired token'}. Re-enter a valid access token and save again.`,
+            });
+          }
         } else {
           setStatus('Disconnected');
         }
@@ -41,9 +64,20 @@ export default function TestWhatsappConnectionSection() {
     checkExistingConfig();
   }, []);
 
+  // Persist non-secret form fields so switching tabs/pages never loses them
+  useEffect(() => {
+    try {
+      localStorage.setItem('wa-connection-form', JSON.stringify({ phoneNumberId, wabaId, testRecipient }));
+    } catch { /* storage unavailable */ }
+  }, [phoneNumberId, wabaId, testRecipient]);
+
   const handleSaveConfiguration = async () => {
-    if (!phoneNumberId || !wabaId || !accessToken) {
-      setMessage({ type: 'error', text: 'Please fill in Phone Number ID, WABA ID, and Access Token.' });
+    if (!phoneNumberId || !wabaId) {
+      setMessage({ type: 'error', text: 'Please fill in Phone Number ID and WABA ID.' });
+      return;
+    }
+    if (!accessToken && !hasSavedToken) {
+      setMessage({ type: 'error', text: 'Please provide an Access Token.' });
       return;
     }
     setIsSaving(true);
@@ -52,14 +86,19 @@ export default function TestWhatsappConnectionSection() {
       const response = await fetch(`${API}/api/whatsapp/test-config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phoneNumberId, wabaId, accessToken }),
+        body: JSON.stringify({ phoneNumberId, wabaId, accessToken: accessToken || undefined }),
       });
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.message || 'Failed to save configuration');
       }
-      setMessage({ type: 'success', text: 'Configuration saved. Ready to send test messages!' });
+      const data = await response.json().catch(() => ({}));
+      setHasSavedToken(true);
       setStatus('Connected');
+      setMessage({
+        type: 'success',
+        text: `✅ Verified with Meta and saved${data.displayPhoneNumber ? ` for ${data.displayPhoneNumber}` : ''}. Ready to send test messages!`,
+      });
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'An error occurred while saving.' });
       setStatus('Disconnected');
@@ -177,7 +216,7 @@ export default function TestWhatsappConnectionSection() {
                 type="password"
                 value={accessToken}
                 onChange={(e) => setAccessToken(e.target.value)}
-                placeholder="EAAB..."
+                placeholder={hasSavedToken ? '•••••••• (leave blank to keep saved token)' : 'EAAB...'}
                 className="w-full px-4 py-3 rounded-xl border border-[#dce4db] bg-white focus:outline-none focus:ring-2 focus:ring-[#276045]/20 focus:border-[#276045] transition-all text-[15px]"
               />
               <p className="mt-1.5 text-xs text-[#6b8275]">
@@ -202,9 +241,8 @@ export default function TestWhatsappConnectionSection() {
               Test Connection
             </h4>
             <p className="text-sm text-[#4a6355]">
-              Once configured, send a{' '}
-              <code className="bg-[#e6eee6] px-1.5 py-0.5 rounded text-[#276045]">hello_world</code>{' '}
-              template to verify delivery.
+              Once configured, we send your <strong>first approved template</strong> (or a plain text
+              message if none exist yet) to verify delivery.
             </p>
 
             <div className="pt-2">

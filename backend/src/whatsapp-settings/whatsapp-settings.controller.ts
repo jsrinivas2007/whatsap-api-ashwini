@@ -29,9 +29,22 @@ export class WhatsappSettingsController {
   async getSetupStatus(@Headers() headers: any) {
     const accountId = this.getAccountId(headers);
     const account = await this.wabaService.getWabaAccount(accountId);
-    
+
     if (!account) {
       return null; // Frontend expects empty response for unconnected state
+    }
+
+    // Live-validate the stored token against Meta so the UI never shows a
+    // false "Connected" badge for expired/revoked credentials.
+    let connectionVerified = false;
+    let verificationError: string | null = null;
+    if (account.access_token && account.phone_number_id) {
+      try {
+        await this.metaApiService.validateCredentials(account.access_token, account.phone_number_id);
+        connectionVerified = true;
+      } catch (err: any) {
+        verificationError = err.message || 'Token could not be verified';
+      }
     }
 
     return {
@@ -42,6 +55,13 @@ export class WhatsappSettingsController {
       qualityRating: account.quality_rating,
       fbBusinessVerificationStatus: account.fb_business_verification_status,
       paymentMethodStatus: account.payment_method_status,
+      // Non-secret identifiers so the frontend can prefill the form after
+      // navigation/tab switches (token is intentionally never returned).
+      phoneNumberId: account.phone_number_id,
+      wabaId: account.waba_id,
+      hasToken: !!account.access_token,
+      connectionVerified,
+      verificationError,
     };
   }
 
@@ -177,21 +197,35 @@ export class WhatsappSettingsController {
   async testConfig(@Body() body: any, @Headers() headers: any) {
     const accountId = this.getAccountId(headers);
 
-    if (!body.phoneNumberId || !body.wabaId || !body.accessToken) {
-      throw new BadRequestException('Phone Number ID, WABA ID, and Access Token are required');
+    if (!body.phoneNumberId || !body.wabaId) {
+      throw new BadRequestException('Phone Number ID and WABA ID are required');
     }
 
-    // Save test credentials to WabaAccount — connection_type must match DB enum
+    // Allow keeping the previously stored token when the field is left blank
+    const existing = await this.wabaService.getWabaAccount(accountId);
+    const accessToken = body.accessToken || existing?.access_token;
+    if (!accessToken) {
+      throw new BadRequestException('Access Token is required');
+    }
+
+    // Validate against Meta BEFORE saving — never store broken credentials
+    let verified;
+    try {
+      verified = await this.metaApiService.validateCredentials(accessToken, body.phoneNumberId);
+    } catch (err: any) {
+      throw new BadRequestException(`Meta rejected these credentials: ${err.message}`);
+    }
+
     await this.wabaService.createWabaAccount(accountId, {
       waba_id: body.wabaId,
       phone_number_id: body.phoneNumberId,
-      access_token: body.accessToken,
-      display_phone_number: 'Test Number',
-      business_name: 'Test Business',
+      access_token: accessToken,
+      display_phone_number: verified.display_phone_number || 'Test Number',
+      business_name: verified.verified_name || 'Test Business',
       connection_type: 'new_number',
     });
 
-    return { success: true };
+    return { success: true, verified: true, displayPhoneNumber: verified.display_phone_number || null };
   }
 
   @Post('send-test-message')
@@ -204,13 +238,40 @@ export class WhatsappSettingsController {
 
     // Credentials are retrieved server-side from DB — access token never exposed to frontend
     try {
-      const result = await this.whatsappApiService.sendTemplateMessage(
-        accountId,
-        body.recipient,
-        'hello_world',
-        'en_US',
-        []
-      );
+      // Pick what to send: explicit template > first APPROVED template > plain text.
+      // (The old hardcoded 'hello_world' sample only exists on Meta sandbox
+      // numbers, which caused "template does not exist" errors on real numbers.)
+      const waba = await this.wabaService.getWabaAccount(accountId);
+      let templateName: string | null = body.templateName || null;
+      let language: string = body.language || 'en_US';
+
+      if (!templateName && waba?.access_token && waba?.waba_id) {
+        const approved = await this.metaApiService.listApprovedTemplates(waba.access_token, waba.waba_id);
+        if (approved.length > 0) {
+          templateName = approved[0].name;
+          language = approved[0].language || language;
+        }
+      }
+
+      let result: any;
+      let sentAs: string;
+      if (templateName) {
+        result = await this.whatsappApiService.sendTemplateMessage(
+          accountId,
+          body.recipient,
+          templateName,
+          language,
+          []
+        );
+        sentAs = `template:${templateName}`;
+      } else {
+        result = await this.whatsappApiService.sendTextMessage(
+          accountId,
+          body.recipient,
+          'Test message from Ashwini Innovations ✔ Connection is working.'
+        );
+        sentAs = 'text';
+      }
 
       // Save this outbound test message to the DB so it appears in the Chats UI
       const client = this.wabaService['supabase'].getClient(); // accessing the supabase client
@@ -254,10 +315,13 @@ export class WhatsappSettingsController {
         });
       }
 
-      return { success: true, meta: result };
+      return { success: true, sentAs, meta: result };
     } catch (error: any) {
       this.logger.error(`Failed to send test message: ${error.message}`);
-      throw new InternalServerErrorException(error.message || 'Failed to send test message');
+      const friendly = /24 hours|re-engagement|session/i.test(error.message || '')
+        ? `${error.message}. Tip: plain text only delivers within 24h of an incoming message from that number — send an approved template instead.`
+        : error.message;
+      throw new InternalServerErrorException(friendly || 'Failed to send test message');
     }
   }
 }

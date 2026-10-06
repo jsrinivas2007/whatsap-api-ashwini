@@ -55,6 +55,21 @@ export class WhatsappApiService {
   }
 
   /**
+   * Send a plain text session message (only deliverable inside an open
+   * 24-hour customer-service window initiated by the recipient).
+   */
+  async sendTextMessage(accountId: string, to: string, body: string) {
+    const waba = await this.getConnectedWabaAccount(accountId);
+    const payload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'text',
+      text: { body },
+    };
+    return this.executeMetaApiRequest(waba.phone_number_id, waba.access_token, 'messages', payload);
+  }
+
+  /**
    * Submit a template for review to Meta.
    */
   async submitTemplate(
