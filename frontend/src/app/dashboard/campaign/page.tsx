@@ -5,6 +5,7 @@ import {
   BarChart3,
   ChevronDown,
   Download,
+  FileText,
   Filter,
   Image as ImageIcon,
   Megaphone,
@@ -40,47 +41,6 @@ type Campaign = {
 };
 
 import { Contact, Source, ContactModal, ImportModal } from "../contacts/page";
-
-const savedContactLists = [
-  { id: "all", name: "All Contacts", count: 1250, source: "All sources" },
-  { id: "admissions", name: "Admissions 2026", count: 240, source: "Import" },
-  { id: "parents", name: "Parents", count: 180, source: "Manual" },
-  { id: "leads", name: "Interested Leads", count: 96, source: "Chat" },
-  { id: "hot", name: "Hot Leads", count: 24, source: "Tag" },
-];
-
-const sampleContacts: Contact[] = [
-  { id: "contact-1", name: "Rahul Sharma", countryCode: "91", whatsapp: "9876543210", source: "CSV Upload", tags: ["Hot Lead"], optedOut: false, createdAt: new Date().toISOString(), attributes: {} },
-  { id: "contact-2", name: "Priya Patel", countryCode: "91", whatsapp: "9876543211", source: "CSV Upload", tags: ["In Progress"], optedOut: false, createdAt: new Date().toISOString(), attributes: {} },
-  { id: "contact-3", name: "Amit Kumar", countryCode: "91", whatsapp: "9876543212", source: "Chat", tags: [], optedOut: false, createdAt: new Date().toISOString(), attributes: {} },
-  { id: "contact-4", name: "SINDHU", countryCode: "91", whatsapp: "9866011981", source: "Excel Upload", tags: ["Hot Lead"], optedOut: true, createdAt: new Date().toISOString(), attributes: {} },
-  { id: "contact-5", name: "srinivas", countryCode: "91", whatsapp: "9964011126", source: "Chat", tags: ["No Response"], optedOut: false, createdAt: new Date().toISOString(), attributes: {} },
-];
-
-const seedCampaigns: Campaign[] = [
-  {
-    id: "cmp-1",
-    name: "Diwali Sale",
-    template: "diwali_offer",
-    contacts: 1250,
-    type: "BROADCAST",
-    status: "Completed",
-    createdAt: "2026-09-20",
-    delivered: 1180,
-    read: 942,
-    replies: 84,
-    failed: 70,
-  },
-  {
-    id: "cmp-2",
-    name: "New Customer Welcome",
-    template: "welcome_message",
-    contacts: 85,
-    type: "BROADCAST",
-    status: "Scheduled",
-    createdAt: "2026-09-22",
-  },
-];
 
 const statusStyles: Record<CampaignStatus, string> = {
   Draft: "bg-slate-100 text-slate-600",
@@ -478,9 +438,48 @@ function BroadcastBuilder({
   const [testPhone, setTestPhone] = useState("");
   const [testSent, setTestSent] = useState(false);
   const [testError, setTestError] = useState("");
+  const [isSendingTest, setIsSendingTest] = useState(false);
   const [contactsOpen, setContactsOpen] = useState(false);
 
-  const sendTestMessage = () => {
+  // Real approved templates from the connected WABA (Meta), not hardcoded names
+  const [approvedTemplates, setApprovedTemplates] = useState<{ name: string; language: string; paramCount: number; requiresMedia: boolean }[]>([]);
+  // Full template content (body/header/footer/buttons) synced in our DB, for the preview
+  const [templateDetails, setTemplateDetails] = useState<any[]>([]);
+  useEffect(() => {
+    let active = true;
+    fetch("/api/whatsapp/approved-templates")
+      .then((res) => (res.ok ? res.json() : []))
+      .then((list) => { if (active && Array.isArray(list)) setApprovedTemplates(list); })
+      .catch(() => {});
+    fetch("/api/templates?status=APPROVED")
+      .then((res) => (res.ok ? res.json() : []))
+      .then((list) => { if (active && Array.isArray(list)) setTemplateDetails(list); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+
+  // {{1}}, {{2}}… values for the selected template (test send). Defaults come
+  // from the sample values stored at template-sync time; the user can edit them.
+  const [paramValues, setParamValues] = useState<string[]>([]);
+  const selectedTemplateDetail = templateDetails.find((t: any) => t.name === template);
+  const templateParams: string[] = (() => {
+    const body = String(selectedTemplateDetail?.body || "");
+    const nums = (body.match(/\{\{(\d+)\}\}/g) || []).map((m) => parseInt(m.replace(/\D/g, ""), 10));
+    const count = nums.length ? Math.max(...nums) : 0;
+    const vars = [...(selectedTemplateDetail?.template_variables || [])].sort(
+      (a: any, b: any) => a.position - b.position,
+    );
+    return Array.from({ length: count }, (_unused, i) => String(vars[i]?.sample_value || ""));
+  })();
+  const effectiveParams = templateParams.map((fb, i) => (paramValues[i] !== undefined ? paramValues[i] : fb));
+
+  // Switching template clears hand-edited values so the new template's
+  // stored sample values are used again.
+  useEffect(() => {
+    setParamValues([]);
+  }, [template]);
+
+  const sendTestMessage = async () => {
     const normalizedPhone = testPhone.replace(/\D/g, "");
     if (!template) {
       setTestError("Select a template before sending a test message.");
@@ -491,8 +490,35 @@ function BroadcastBuilder({
       setTestSent(false);
       return;
     }
+    if (effectiveParams.some((p) => !p.trim())) {
+      setTestError("Please fill values for all message variables ({{1}}, {{2}}…).");
+      setTestSent(false);
+      return;
+    }
     setTestError("");
-    setTestSent(true);
+    setIsSendingTest(true);
+    try {
+      // Country select is fixed to IN — prefix +91 unless already prefixed
+      const recipient = normalizedPhone.startsWith("91") && normalizedPhone.length >= 11
+        ? normalizedPhone
+        : `91${normalizedPhone}`;
+      const selected = approvedTemplates.find((t) => t.name === template);
+      const res = await fetch("/api/whatsapp/send-test-message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recipient, templateName: template, language: selected?.language || "en_US", paramValues: effectiveParams.map((p) => p.trim()) }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(typeof err.message === "string" ? err.message : "Failed to send test message");
+      }
+      setTestSent(true);
+    } catch (err: any) {
+      setTestError(err.message || "Failed to send test message");
+      setTestSent(false);
+    } finally {
+      setIsSendingTest(false);
+    }
   };
   const launch = () => {
     if (!name.trim() || !template || contacts.length === 0) return;
@@ -556,9 +582,15 @@ function BroadcastBuilder({
                     className="mt-3 h-10 w-full rounded-[6px] border border-slate-300 bg-white px-3 text-[13px] outline-none focus:border-[#1B2CC1]"
                   >
                     <option value="">Select Template</option>
-                    <option value="welcome_message">welcome_message</option>
-                    <option value="diwali_offer">diwali_offer</option>
-                    <option value="product_update">product_update</option>
+                    {approvedTemplates.length > 0 ? (
+                      approvedTemplates.map((t) => (
+                        <option key={`${t.name}_${t.language}`} value={t.name}>
+                          {t.name} ({t.language}){t.paramCount > 0 || t.requiresMedia ? " — needs variables/media" : ""}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="" disabled>No approved templates found — create one in Templates</option>
+                    )}
                   </select>
                   <span className="mt-2 block text-[12px] font-normal text-slate-500">
                     Can&apos;t find your template?{" "}
@@ -646,16 +678,37 @@ function BroadcastBuilder({
                   <button
                     type="button"
                     onClick={sendTestMessage}
-                    disabled={testSent}
+                    disabled={testSent || isSendingTest}
                     className="inline-flex h-10 items-center gap-2 rounded-[6px] border border-[#5a55ee] px-4 text-[13px] font-semibold text-[#4b46e5] disabled:opacity-40"
                   >
                     <Send className="h-4 w-4" />
-                    Send
+                    {isSendingTest ? "Sending…" : "Send"}
                   </button>
                 </div>
+                {effectiveParams.length > 0 && (
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    {effectiveParams.map((value, i) => (
+                      <label key={i} className="text-[12px] font-medium text-slate-500">
+                        Message variable {`{{${i + 1}}}`}
+                        <input
+                          value={value}
+                          onChange={(event) =>
+                            setParamValues((prev) => {
+                              const next = [...prev];
+                              next[i] = event.target.value;
+                              return next;
+                            })
+                          }
+                          placeholder={`Value for {${i + 1}}`}
+                          className="mt-1 h-10 w-full rounded-[6px] border border-slate-300 px-3 text-[13px] text-slate-800 font-normal"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                )}
                 {testSent ? (
                   <p className="mt-2 text-[12px] text-emerald-600">
-                    Test message queued for {testPhone}.
+                    ✅ Test message sent to {testPhone} via “{template}”. (In Development mode Meta only delivers to numbers added as app Testers.)
                   </p>
                 ) : null}
                 {testError ? <p className="mt-2 text-[12px] text-rose-600">{testError}</p> : null}
@@ -672,7 +725,10 @@ function BroadcastBuilder({
               </button>
             </div>
           </section>
-          <PhonePreview template={template} />
+          <PhonePreview
+            template={template}
+            detail={templateDetails.find((t: any) => t.name === template)}
+          />
         </div>
       {contactsOpen ? (
         <ContactPicker
@@ -689,7 +745,16 @@ function BroadcastBuilder({
   );
 }
 
-function PhonePreview({ template }: { template: string }) {
+function PhonePreview({ template, detail }: { template: string; detail?: any }) {
+  // Replace {{1}} placeholders with their stored sample values
+  const renderBody = (t: any): string => {
+    return String(t.body || '').replace(/\{\{(\d+)\}\}/g, (_m: string, n: string) => {
+      const v = (t.template_variables || []).find((x: any) => x.position === Number(n));
+      return v?.sample_value || `{{${n}}}`;
+    });
+  };
+  const isMediaUrl = (s: any) => typeof s === 'string' && /^https?:\/\//.test(s);
+
   return (
     <aside className="flex min-h-[620px] items-center justify-center border-l border-slate-200 bg-[#f8f9fc] p-6">
       <div className="relative h-[650px] w-[330px] overflow-hidden rounded-[42px] border-[10px] border-[#171717] bg-[#fffdf8] shadow-xl">
@@ -709,12 +774,52 @@ function PhonePreview({ template }: { template: string }) {
             <Phone className="h-4 w-4" />
           </div>
         </div>
-        <div className="p-4">
-          <div className="rounded-[8px] border border-slate-200 bg-white p-4 text-[12px] text-slate-500 shadow-sm">
-            {template
-              ? `Preview for ${template}`
-              : "Select a template to preview."}
-          </div>
+        <div className="p-4 overflow-y-auto" style={{ maxHeight: 'calc(650px - 130px)' }}>
+          {detail ? (
+            <div className="overflow-hidden rounded-[10px] border border-slate-200 bg-white text-[12px] shadow-sm">
+              {detail.header_type === 'IMAGE' && isMediaUrl(detail.header_content) && (
+                <img src={detail.header_content} alt="" className="max-h-44 w-full object-cover" />
+              )}
+              {detail.header_type === 'IMAGE' && !isMediaUrl(detail.header_content) && (
+                <div className="flex h-28 items-center justify-center bg-slate-100 text-slate-400">Image header</div>
+              )}
+              {detail.header_type === 'VIDEO' && isMediaUrl(detail.header_content) && (
+                <video src={detail.header_content} controls className="max-h-44 w-full object-cover" />
+              )}
+              {detail.header_type === 'VIDEO' && !isMediaUrl(detail.header_content) && (
+                <div className="flex h-28 items-center justify-center bg-slate-100 text-slate-400">Video header</div>
+              )}
+              {detail.header_type === 'DOCUMENT' && (
+                <div className="flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2 text-slate-500">
+                  <FileText className="h-4 w-4" /> Document header
+                </div>
+              )}
+              {detail.header_type === 'TEXT' && detail.header_content && (
+                <p className="px-3 pt-3 text-[13px] font-bold text-[#091540]">{detail.header_content}</p>
+              )}
+              <p className="whitespace-pre-wrap px-3 py-2 leading-relaxed text-slate-600">{renderBody(detail)}</p>
+              {detail.footer ? (
+                <p className="px-3 pb-2 text-[10px] text-slate-400">{detail.footer}</p>
+              ) : null}
+              {Array.isArray(detail.template_buttons) && detail.template_buttons.length > 0 && (
+                <div className="border-t border-slate-100">
+                  {detail.template_buttons.map((b: any, i: number) => (
+                    <p key={i} className="border-b border-slate-50 px-3 py-2 text-center text-[12px] font-medium text-[#4b46e5] last:border-0">
+                      {b.button_text || 'Button'}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : template ? (
+            <div className="rounded-[8px] border border-slate-200 bg-white p-4 text-[12px] text-slate-500">
+              Loading “{template}” content… If it stays empty, open <strong>Templates → Sync Status</strong> once to pull template content from Meta.
+            </div>
+          ) : (
+            <div className="rounded-[8px] border border-slate-200 bg-white p-4 text-[12px] text-slate-500">
+              Select a template to preview.
+            </div>
+          )}
         </div>
         <div className="absolute bottom-0 flex w-full items-center gap-3 bg-white p-3">
           <Plus className="h-5 w-5" />

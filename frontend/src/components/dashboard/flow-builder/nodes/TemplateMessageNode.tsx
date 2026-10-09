@@ -29,25 +29,28 @@ function TemplateMessageNode({ data, selected }: NodeProps) {
   const templateId: string = config.template_id || "";
 
   useEffect(() => {
-    // In a real app this would call the existing GET /api/templates
-    // Mocking here for the UI flow demonstration
-    setTemplates([
-      {
-        id: "1",
-        name: "welcome_message",
-        language: "en_US",
-        components: [{ type: "BODY", text: "Welcome to our service!" }],
-        buttons: [{ id: "b1", type: "QUICK_REPLY", text: "Get Started" }, { id: "b2", type: "QUICK_REPLY", text: "Learn More" }]
-      },
-      {
-        id: "2",
-        name: "order_update",
-        language: "en_US",
-        components: [{ type: "BODY", text: "Your order {{1}} has shipped." }],
-        buttons: [{ id: "b3", type: "URL", text: "Track Order" }]
-      }
-    ]);
-    setLoading(false);
+    // Load the tenant's real templates from the backend (no mock data)
+    let active = true;
+    fetch("/api/templates?status=APPROVED")
+      .then((res) => (res.ok ? res.json() : []))
+      .then((list: any[]) => {
+        if (!active) return;
+        const mapped: Template[] = (Array.isArray(list) ? list : []).map((t: any) => ({
+          id: String(t.id),
+          name: t.name,
+          language: t.language,
+          components: [{ type: "BODY", text: t.body }],
+          buttons: (t.template_buttons || []).map((b: any, i: number) => ({
+            id: String(b.id ?? i),
+            type: b.type,
+            text: b.button_text,
+          })),
+        }));
+        setTemplates(mapped);
+      })
+      .catch(() => setTemplates([]))
+      .finally(() => active && setLoading(false));
+    return () => { active = false; };
   }, []);
 
   const updateConfig = useCallback((updates: Record<string, any>) => {

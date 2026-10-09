@@ -22,8 +22,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       window.fetch = async (...args) => {
         const resource = args[0];
         let config = args[1];
-        
-        if (typeof resource === 'string' && resource.startsWith('/api/')) {
+
+        // Match relative /api/... calls AND absolute backend URLs like
+        // https://render-host/api/whatsapp/... — without this, widgets that
+        // call the API directly save data under the backend's default account
+        // instead of the logged-in tenant.
+        let isApiCall = false;
+        if (typeof resource === 'string') {
+          if (resource.startsWith('/api/')) {
+            isApiCall = true;
+          } else if (/^https?:\/\//i.test(resource)) {
+            try {
+              isApiCall = new URL(resource).pathname.startsWith('/api/');
+            } catch {
+              isApiCall = false;
+            }
+          }
+        }
+
+        if (isApiCall) {
           config = config || {};
           // Merge custom headers
           const headers = new Headers(config.headers || {});

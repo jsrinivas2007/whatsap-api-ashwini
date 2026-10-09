@@ -264,7 +264,12 @@ export default function ChatsPage() {
           [selectedId]: [...(previous[selectedId] ?? []), mappedMsg],
         }));
       } else {
-        showToast("Failed to send message");
+        const errData = await res.json().catch(() => ({}));
+        const detail = typeof errData.message === 'string'
+          ? errData.message
+          : Array.isArray(errData.message) ? errData.message.join(' ')
+          : 'Failed to send message';
+        showToast(detail);
       }
     } catch (err) {
       showToast("Error sending message");

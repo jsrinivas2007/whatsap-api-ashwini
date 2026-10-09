@@ -49,6 +49,17 @@ export default function AppSidebar({
 }: AppSidebarProps) {
   const pathname = usePathname();
 
+  // Single source of truth for nav-item styling so primary, utility and
+  // logout rows all look identical (no visual "split").
+  const navItemClass = (isActive: boolean) =>
+    [
+      'group relative flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition-all duration-200',
+      collapsed ? 'justify-center px-2' : '',
+      isActive
+        ? 'bg-primary/10 text-primary shadow-sm ring-1 ring-primary/20'
+        : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+    ].join(' ');
+
   const renderNavItem = (item: { label: string; href: string; icon: typeof LayoutDashboard }, index: number) => {
     const Icon = item.icon;
     const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
@@ -59,20 +70,25 @@ export default function AppSidebar({
         href={item.href}
         onClick={onCloseMobile}
         title={collapsed ? item.label : undefined}
-        className={[
-          'group relative flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition-all duration-200',
-          collapsed ? 'justify-center px-2' : '',
-          isActive
-            ? 'bg-primary/10 text-primary shadow-sm ring-1 ring-primary/20'
-            : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-        ].join(' ')}
-        style={{ marginTop: index === 0 ? 0 : undefined }}
+        className={navItemClass(isActive)}
       >
         <Icon className="h-5 w-5 shrink-0" />
         {!collapsed && <span>{item.label}</span>}
       </Link>
     );
   };
+
+  const renderLogoutItem = () => (
+    <button
+      type="button"
+      onClick={onLogout}
+      title={collapsed ? 'Logout' : undefined}
+      className={navItemClass(false) + ' w-full'}
+    >
+      <LogOut className="h-5 w-5 shrink-0" />
+      {!collapsed && <span>Logout</span>}
+    </button>
+  );
 
   const sidebarContent = (
     <div className="flex h-full flex-col bg-card shadow-[4px_0_20px_rgba(0,0,0,0.02)]">
@@ -94,21 +110,11 @@ export default function AppSidebar({
         <nav className="space-y-1.5">{primaryItems.map(renderNavItem)}</nav>
       </div>
 
-      <div className="border-t border-border px-3 py-4">
-        <div className="space-y-1.5">{utilityItems.map(renderNavItem)}</div>
-
-        <button
-          type="button"
-          onClick={onLogout}
-          title={collapsed ? 'Logout' : undefined}
-          className={[
-            'mt-4 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground',
-            collapsed ? 'justify-center px-2' : '',
-          ].join(' ')}
-        >
-          <LogOut className="h-5 w-5 shrink-0" />
-          {!collapsed && <span>Logout</span>}
-        </button>
+      <div className="px-3 pb-4 pt-2">
+        <nav className="space-y-1.5">
+          {utilityItems.map(renderNavItem)}
+          {renderLogoutItem()}
+        </nav>
       </div>
     </div>
   );

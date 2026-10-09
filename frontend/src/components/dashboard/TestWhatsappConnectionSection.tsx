@@ -124,7 +124,14 @@ export default function TestWhatsappConnectionSection() {
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.message || 'Failed to send test message');
       }
-      setMessage({ type: 'success', text: '✅ Test message sent successfully!' });
+      const data = await response.json().catch(() => ({}));
+      const sentAs: string = data.sentAs || 'message';
+      setMessage({
+        type: 'success',
+        text: sentAs.startsWith('template:')
+          ? `✅ Test template "${sentAs.slice(9)}" sent successfully!`
+          : '✅ Test text message sent! (No parameter-free approved template was available, so plain text was used.)',
+      });
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'An error occurred while sending the message.' });
     } finally {

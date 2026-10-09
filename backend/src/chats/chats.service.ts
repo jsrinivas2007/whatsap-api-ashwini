@@ -1,18 +1,23 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service.js';
+import { WhatsappApiService } from '../whatsapp/whatsapp-api/whatsapp-api.service.js';
 
 @Injectable()
 export class ChatsService {
   private bulkJobs = new Map<string, any>();
+  private readonly logger = new Logger(ChatsService.name);
 
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(
+    private readonly supabase: SupabaseService,
+    private readonly whatsappApi: WhatsappApiService,
+  ) {}
 
   async getConversations(accountId: string) {
     const client = this.supabase.getClient();
-    // In a real app we'd join with contacts. Here we just fetch conversations.
     const { data, error } = await client
       .from('conversations')
       .select('*, contacts(name, whatsapp_number, country_code)')
+      .eq('account_id', accountId)
       .order('last_message_at', { ascending: false });
 
     if (error) {
@@ -35,14 +40,68 @@ export class ChatsService {
     return data;
   }
 
+  /** Normalizes a stored contact number to international format (digits only). */
+  private toMsisdn(number?: string | null, countryCode?: string | null): string | null {
+    if (!number) return null;
+    const digits = String(number).replace(/\D/g, '');
+    if (!digits) return null;
+    const cc = String(countryCode || '').replace(/\D/g, '');
+    // Already looks international (e.g. 919640111265)
+    if (digits.length >= 11 && (!cc || digits.startsWith(cc))) return digits;
+    if (cc) return cc + digits;
+    return digits;
+  }
+
   async sendMessage(conversationId: string, payload: any) {
     const client = this.supabase.getClient();
+
+    // Load conversation with its contact so we can deliver via the real Meta API
+    const { data: conv, error: convErr } = await client
+      .from('conversations')
+      .select('id, account_id, contact_id, contacts(whatsapp_number, country_code)')
+      .eq('id', conversationId)
+      .single();
+    if (convErr || !conv) {
+      throw new BadRequestException('Conversation not found');
+    }
+
+    const contact = conv.contacts as any;
+    const recipient = this.toMsisdn(contact?.whatsapp_number, contact?.country_code);
+    if (!recipient) {
+      throw new BadRequestException('This conversation has no valid WhatsApp number to send to');
+    }
+
+    // Deliver through the WhatsApp Cloud API — a failure here must surface to
+    // the user instead of being silently stored as "sent" in the database.
+    let metaResult: any;
+    try {
+      metaResult = await this.whatsappApi.sendTextMessage(conv.account_id, recipient, payload.text);
+    } catch (err: any) {
+      const message = err.message || 'Failed to send message';
+      const friendly = /131047|24 hours|re-engagement|window|session active/i.test(message)
+        ? `${message}. WhatsApp only allows free-form replies within 24 hours of the customer's last message — use an approved template to start a new conversation.`
+        : message;
+      // Record the failed attempt so the thread shows what happened
+      await client.from('messages').insert({
+        conversation_id: conversationId,
+        direction: 'outbound',
+        type: 'text',
+        content: { text: payload.text, error: friendly },
+        status: 'failed',
+      });
+      this.logger.error(`Chat message delivery failed for conversation ${conversationId}: ${message}`);
+      throw new BadRequestException(friendly);
+    }
+
+    const metaMessageId = metaResult?.messages?.[0]?.id || null;
+
     const { data, error } = await client.from('messages').insert({
       conversation_id: conversationId,
       direction: 'outbound',
       type: 'text',
       content: { text: payload.text },
       status: 'sent',
+      wa_message_id: metaMessageId,
     }).select().single();
 
     if (error) {

@@ -139,7 +139,9 @@ export class MetaApiService {
   }
 
   /**
-   * Lists APPROVED message templates under a WABA (first page).
+   * Lists APPROVED message templates under a WABA (first page), enriched with
+   * the number of {{param}} placeholders in the body so callers can avoid
+   * sending a parameterized template without values (Meta error #132012).
    */
   async listApprovedTemplates(accessToken: string, wabaId: string) {
     const url = `https://graph.facebook.com/v21.0/${wabaId}/message_templates?status=APPROVED&limit=100&access_token=${accessToken}`;
@@ -147,9 +149,37 @@ export class MetaApiService {
     const data = await res.json();
     if (!res.ok || data.error) {
       this.logger.warn(`Template listing failed for WABA ${wabaId}: ${data.error?.message}`);
-      return [] as { name: string; language: string }[];
+      return [] as { id: string; name: string; language: string; paramCount: number }[];
     }
-    return (data.data || []).map((t: any) => ({ name: t.name, language: t.language }));
+    const templates = (data.data || []).map((t: any) => ({
+      id: t.id,
+      name: t.name,
+      language: t.language,
+      paramCount: -1, // unknown until components are fetched
+      requiresMedia: false, // true when the header needs an image/video/document attachment
+    }));
+
+    // Fetch components for up to 10 templates to count required body parameters
+    for (const t of templates.slice(0, 10)) {
+      try {
+        const detailRes = await fetch(
+          `https://graph.facebook.com/v21.0/${t.id}?fields=components&access_token=${accessToken}`
+        );
+        const detail = await detailRes.json();
+        const comps: any[] = detail.components || [];
+        const body = comps.find((c: any) => c.type === 'BODY');
+        const bodyParams = (body?.text || '').match(/\{\{\d+\}\}/g)?.length || 0;
+        const header = comps.find((c: any) => c.type === 'HEADER');
+        const headerParams = (header?.text || '').match(/\{\{\d+\}\}/g)?.length || 0;
+        t.paramCount = bodyParams + headerParams;
+        // Media headers (IMAGE/VIDEO/DOCUMENT) require a header component with
+        // a live media link even when they contain no {{vars}} (Meta #132012)
+        t.requiresMedia = !!header && header.format !== 'TEXT';
+      } catch {
+        t.paramCount = -1;
+      }
+    }
+    return templates;
   }
 
   // Simulates pulling data from Graph API, which would be cached in Redis in production (15-30min TTL)

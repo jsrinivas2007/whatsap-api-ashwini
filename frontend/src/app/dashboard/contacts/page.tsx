@@ -39,54 +39,8 @@ type AttributeFilter = {
   value: string;
 };
 
-const seedContacts: Contact[] = [
-  {
-    id: "contact-1",
-    name: "SINDHU",
-    countryCode: "91",
-    whatsapp: "9866011981",
-    source: "Excel Upload",
-    tags: ["Hot Lead"],
-    attributes: { City: "Hyderabad", Course: "BCA" },
-    optedOut: false,
-    createdAt: "2026-09-22",
-  },
-  {
-    id: "contact-2",
-    name: "srinivas",
-    countryCode: "91",
-    whatsapp: "9964011126",
-    source: "Chat",
-    tags: ["No Response"],
-    attributes: { City: "Bengaluru" },
-    optedOut: false,
-    createdAt: "2026-09-21",
-  },
-  {
-    id: "contact-3",
-    name: "Rahul Sharma",
-    countryCode: "91",
-    whatsapp: "9876543210",
-    source: "CSV Upload",
-    tags: ["Hot Lead"],
-    attributes: { City: "Mumbai" },
-    optedOut: false,
-    createdAt: "2026-09-20",
-  },
-  {
-    id: "contact-4",
-    name: "Priya Patel",
-    countryCode: "91",
-    whatsapp: "9876543211",
-    source: "Manual",
-    tags: ["In Progress"],
-    attributes: { Course: "MBA" },
-    optedOut: true,
-    createdAt: "2026-09-19",
-  },
-];
-
-// Removed static tagOptions and attributeOptions
+// Removed static tagOptions, attributeOptions and seed contacts — all data
+// comes from the backend (/api/contacts) at runtime.
 const sourceStyles: Record<Source, string> = {
   "Excel Upload": "bg-emerald-50 text-emerald-700",
   Chat: "bg-blue-50 text-blue-700",
