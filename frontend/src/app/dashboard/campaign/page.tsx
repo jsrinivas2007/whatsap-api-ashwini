@@ -636,6 +636,15 @@ function BroadcastBuilder({
                       Create new template -&gt;
                     </button>
                   </span>
+                  {selectedTemplateDetail?.category === "MARKETING" ? (
+                    <span className="mt-2 block rounded-[6px] bg-amber-50 px-3 py-2 text-[12px] font-normal text-amber-700">
+                      ⚠ Marketing template: WhatsApp delivers at most ~1 marketing
+                      message per recipient per rolling week (across all
+                      businesses). Further sends to the same number within the
+                      week are accepted but silently dropped by Meta — use a
+                      UTILITY template for broadcasts.
+                    </span>
+                  ) : null}
                 </label>
               </div>
               <div>
