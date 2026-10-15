@@ -38,6 +38,12 @@ type Campaign = {
   read?: number;
   replies?: number;
   failed?: number;
+  // Sent to the backend on launch so a "Processing" campaign can actually
+  // dispatch the template to each recipient.
+  recipients?: { name: string; phone: string }[];
+  templateLanguage?: string;
+  paramValues?: string[];
+  scheduledAt?: string;
 };
 
 import { Contact, Source, ContactModal, ImportModal } from "../contacts/page";
@@ -50,8 +56,15 @@ const statusStyles: Record<CampaignStatus, string> = {
   Failed: "bg-rose-50 text-rose-700",
   Cancelled: "bg-slate-100 text-slate-500",
 };
-const dateLabel = (value: string) =>
-  new Date(`${value}T00:00:00`).toLocaleDateString("en-US");
+// created_at arrives as a full ISO timestamp from Postgres, but a freshly
+// launched campaign uses a date-only "YYYY-MM-DD". Handle both without
+// producing "Invalid Date".
+const dateLabel = (value: string) => {
+  if (!value) return "\u2014";
+  const iso = value.length <= 10 ? `${value}T00:00:00` : value;
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? "\u2014" : d.toLocaleDateString("en-US");
+};
 
 export default function CampaignPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -68,6 +81,14 @@ export default function CampaignPage() {
   useEffect(() => {
     fetchCampaigns();
   }, []);
+
+  // While any campaign is "Processing" the backend is still dispatching it in
+  // the background, so poll until it settles to Completed/Failed.
+  useEffect(() => {
+    if (!campaigns.some((c) => c.status === "Processing")) return;
+    const id = window.setInterval(fetchCampaigns, 5000);
+    return () => window.clearInterval(id);
+  }, [campaigns]);
 
   const fetchCampaigns = async () => {
     try {
@@ -522,6 +543,12 @@ function BroadcastBuilder({
   };
   const launch = () => {
     if (!name.trim() || !template || contacts.length === 0) return;
+    // Ship the real recipient list (+ template language and {{param}} values)
+    // so the backend can dispatch the broadcast instead of leaving it stuck.
+    const recipients = contacts.map((c) => ({
+      name: c.name,
+      phone: String(`${c.countryCode || "91"}${c.whatsapp}`).replace(/\D/g, ""),
+    }));
     onLaunch({
       id: `cmp-${Date.now()}`,
       name: name.trim(),
@@ -534,6 +561,12 @@ function BroadcastBuilder({
       read: 0,
       replies: 0,
       failed: 0,
+      recipients,
+      templateLanguage:
+        approvedTemplates.find((t) => t.name === template)?.language || "en_US",
+      paramValues: effectiveParams.map((p) => p.trim()),
+      scheduledAt:
+        scheduleEnabled && schedule ? new Date(schedule).toISOString() : undefined,
     });
   };
   return (
