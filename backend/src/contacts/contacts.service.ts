@@ -30,16 +30,47 @@ export class ContactsService {
     console.log("BACKEND ADD CONTACT RECEIVED:", accountId, JSON.stringify(payload));
     const client = this.supabase.getClient();
     
-    // Check duplicate
+    // Check duplicate among active contacts
     const { data: existing } = await client
       .from('contacts')
       .select('id')
       .eq('account_id', accountId)
       .eq('whatsapp_number', payload.whatsapp_number)
-      .single();
+      .is('deleted_at', null)
+      .maybeSingle();
 
     if (existing) {
       throw new BadRequestException('Contact with this WhatsApp number already exists.');
+    }
+
+    // A legacy soft-deleted row with the same number would collide with the
+    // UNIQUE (account_id, whatsapp_number) constraint, so revive it instead of
+    // inserting a duplicate.
+    const { data: softDeleted } = await client
+      .from('contacts')
+      .select('id')
+      .eq('account_id', accountId)
+      .eq('whatsapp_number', payload.whatsapp_number)
+      .not('deleted_at', 'is', null)
+      .maybeSingle();
+
+    if (softDeleted) {
+      const { data, error } = await client
+        .from('contacts')
+        .update({
+          name: payload.name,
+          country_code: payload.country_code || null,
+          tags: payload.tags || [],
+          attributes: payload.attributes || {},
+          source: 'manual',
+          deleted_at: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', softDeleted.id)
+        .select()
+        .single();
+      if (error) throw new BadRequestException(error.message);
+      return data;
     }
 
     const { data, error } = await client.from('contacts').insert({
@@ -79,9 +110,15 @@ export class ContactsService {
 
   async deleteContact(accountId: string, id: string) {
     const client = this.supabase.getClient();
-    const { error } = await client.from('contacts').update({
-      deleted_at: new Date().toISOString(),
-    }).eq('id', id).eq('account_id', accountId);
+    // Hard delete: remove the row from the database. Related conversations and
+    // their messages cascade away via the ON DELETE CASCADE foreign keys, so no
+    // orphaned chat data is left behind. (A soft delete here previously left
+    // "deleted" contacts sitting in the table forever.)
+    const { error } = await client
+      .from('contacts')
+      .delete()
+      .eq('id', id)
+      .eq('account_id', accountId);
 
     if (error) {
       throw new BadRequestException(error.message);
