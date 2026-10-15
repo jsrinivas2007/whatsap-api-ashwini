@@ -223,31 +223,51 @@ export class CampaignsService {
     const tmplRow: any = data;
     const components: any[] = [];
 
+    // Media header (IMAGE/VIDEO/DOCUMENT): Meta REQUIRES a header parameter at
+    // send time for these templates — omitting it returns #132012
+    // "expected IMAGE, received UNKNOWN". The media must be passed as an http
+    // LINK (image:{link}) — NOT image:{id}, which only accepts a numeric media
+    // upload ID and returns #100 for a URL. Crucially the link must be FRESH:
+    // the scontent CDN link stored in our DB expires (oe= epoch param), so Meta
+    // accepts the send but silently fails delivery ("Completed but not
+    // received"). We therefore re-read the live example header_handle URL from
+    // Meta at send time, mirroring the proven test-send path exactly.
     const headerType = String(tmplRow?.header_type || 'NONE').toUpperCase();
-    let headerLink = String(tmplRow?.header_content || '');
     const mediaParamMap: Record<string, string> = { IMAGE: 'image', VIDEO: 'video', DOCUMENT: 'document' };
     const mediaType = mediaParamMap[headerType];
-    if (mediaType && waba?.access_token && waba?.waba_id) {
-      try {
-        const metaTmpls: any = await fetch(
-          `https://graph.facebook.com/v21.0/${waba.waba_id}/message_templates?limit=100&access_token=${waba.access_token}`,
-        ).then((r) => r.json());
-        const live = (metaTmpls.data || []).find(
-          (x: any) => x.name === templateName && (x.language === language || !language),
-        );
-        const liveHandle = live?.components?.find((c: any) => c.type === 'HEADER')?.example?.header_handle?.[0];
-        if (liveHandle) headerLink = String(liveHandle);
-      } catch {
-        // keep stored value
+    let headerVia = 'none';
+    if (mediaType) {
+      let headerLink = String(tmplRow?.header_content || '');
+      if (waba?.access_token && waba?.waba_id) {
+        try {
+          const metaTmpls: any = await fetch(
+            `https://graph.facebook.com/v21.0/${waba.waba_id}/message_templates?limit=250&access_token=${waba.access_token}`,
+          ).then((r) => r.json());
+          const live = (metaTmpls.data || []).find(
+            (x: any) =>
+              x.name === templateName &&
+              (!language || String(x.language).toLowerCase() === String(language).toLowerCase()),
+          );
+          const hdr = live?.components?.find((c: any) => c.type === 'HEADER');
+          const handle = hdr?.example?.header_handle?.[0];
+          const urlField = hdr?.example?.header_url;
+          const url = Array.isArray(urlField) ? urlField[0] : (urlField || '');
+          if (/^https?:\/\//i.test(String(handle || ''))) headerLink = String(handle);
+          else if (/^https?:\/\//i.test(String(url || ''))) headerLink = String(url);
+          headerVia = 'live';
+        } catch {
+          headerVia = 'stored';
+        }
+      } else {
+        headerVia = 'stored';
       }
-    }
-    if (mediaType && /^https?:\/\//i.test(headerLink)) {
-      components.push({ type: 'header', parameters: [{ type: mediaType, [mediaType]: { link: headerLink } }] });
+      if (/^https?:\/\//i.test(headerLink)) {
+        components.push({ type: 'header', parameters: [{ type: mediaType, [mediaType]: { link: headerLink } }] });
+      }
     }
     this.logger.log(
       `[campaign build] template="${templateName}" headerType=${headerType} ` +
-        `sentHeaderComponent=${components.some((c) => c.type === 'header')} ` +
-        `headerLinkIsHttp=${/^https?:\/\//i.test(headerLink)}`,
+        `headerSent=${components.some((c) => c.type === 'header')} headerVia=${headerVia}`,
     );
 
     const needed = (String(tmplRow?.body || '').match(/\{\{\d+\}\}/g) || []).length;
