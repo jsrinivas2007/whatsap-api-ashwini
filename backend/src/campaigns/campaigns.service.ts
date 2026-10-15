@@ -88,10 +88,15 @@ export class CampaignsService {
 
     let delivered = 0;
     let failed = 0;
+    this.logger.log(
+      `[campaign ${campaignId}] START template="${templateName}" lang="${language}" ` +
+        `recipients=${recipients.length} components=${JSON.stringify(built.components)}`,
+    );
     for (const r of recipients) {
       const phone = String(r?.phone || '').replace(/\D/g, '');
       if (!phone) {
         failed++;
+        this.logger.warn(`[campaign ${campaignId}] SKIP blank phone for recipient ${JSON.stringify(r)}`);
         continue;
       }
       try {
@@ -104,6 +109,12 @@ export class CampaignsService {
         );
         delivered++;
         const waId = result?.messages?.[0]?.id || null;
+        // Meta can answer HTTP 200 with per-message warnings even when the
+        // message will not actually be delivered, so log the full response.
+        this.logger.log(
+          `[campaign ${campaignId}] SENT to ${phone} -> ${waId || 'no-id'} ` +
+            `metaResponse=${JSON.stringify(result)}`,
+        );
         await this.logCampaignMessage(client, accountId, phone, r?.name, templateName, built.preview, waId);
       } catch (err: any) {
         failed++;
@@ -233,6 +244,11 @@ export class CampaignsService {
     if (mediaType && /^https?:\/\//i.test(headerLink)) {
       components.push({ type: 'header', parameters: [{ type: mediaType, [mediaType]: { link: headerLink } }] });
     }
+    this.logger.log(
+      `[campaign build] template="${templateName}" headerType=${headerType} ` +
+        `sentHeaderComponent=${components.some((c) => c.type === 'header')} ` +
+        `headerLinkIsHttp=${/^https?:\/\//i.test(headerLink)}`,
+    );
 
     const needed = (String(tmplRow?.body || '').match(/\{\{\d+\}\}/g) || []).length;
     let bodyParameters: { type: string; text: string }[] = [];
