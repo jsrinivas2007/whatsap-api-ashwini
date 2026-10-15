@@ -545,10 +545,15 @@ function BroadcastBuilder({
     if (!name.trim() || !template || contacts.length === 0) return;
     // Ship the real recipient list (+ template language and {{param}} values)
     // so the backend can dispatch the broadcast instead of leaving it stuck.
-    const recipients = contacts.map((c) => ({
-      name: c.name,
-      phone: String(`${c.countryCode || "91"}${c.whatsapp}`).replace(/\D/g, ""),
-    }));
+    // Numbers are stored inconsistently ("+91 9640111265", "919640111265",
+    // "9866011981"+cc), so normalize without ever double-prefixing the 91.
+    const recipients = contacts.map((c) => {
+      const digits = String(c.whatsapp || "").replace(/\D/g, "");
+      const cc = String(c.countryCode || "").replace(/\D/g, "");
+      const alreadyHasCountryCode = digits.length > 10 && (!cc || digits.startsWith(cc));
+      const phone = alreadyHasCountryCode ? digits : `${cc || "91"}${digits}`;
+      return { name: c.name, phone };
+    });
     onLaunch({
       id: `cmp-${Date.now()}`,
       name: name.trim(),
